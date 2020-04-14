@@ -13,6 +13,17 @@ struct ExportSATData {
     double sumsq;
 };
 
+/* at this point we know that the detector is made of modules, and for the
+   purposes of this analysis we know that interesting features are constrained
+   to a single module => could split the SAT calculation across modules,
+   resetting the counters at the TLC of each module - happy side-effect of this
+   is we don't need to worry about massive float comparisons as most modules
+   are ~ 500,000 pixels - leaving plenty of resolution */
+
+/* could also split the calculation to run in parallel on each module since
+   the calculation will be SIMD-shaped - each module has the same dimensions -
+   may not give a massive speedup but could be useful */
+
 void compute_sat(uniform int width,
                  uniform int height,
                  const uniform float_input_t src[],
@@ -43,6 +54,12 @@ void compute_sat(uniform int width,
     }
 }
 
+/* again in here if we know a priori the modular structure of the detector
+   we can improve the parallelism by computing the SAT for each module
+   independently - as well as reducing the loss of fidelity in large float
+   comparisons. means each module could be a task then using gangs with each
+   module to fill up all the vector units for each core */
+
 export void dispersion_threshold(uniform const float_input_t *uniform src,
                                  uniform const int *uniform mask,
                                  uniform const float gain,
@@ -62,7 +79,9 @@ export void dispersion_threshold(uniform const float_input_t *uniform src,
     table.sum = uniform new float_t[width * height];
     table.sumsq = uniform new float_t[width * height];
 
+    // launch compute_sat(module)
     compute_sat(width, height, src, mask, table);
+    // sync
 
     // Copy over the SAT for diagnostics
     if (satData) {
@@ -73,6 +92,7 @@ export void dispersion_threshold(uniform const float_input_t *uniform src,
         }
     }
 
+    // launch dispersion(module)
     foreach (y = 0 ... height, x = 0 ... width) {
         // Get the left, right, top, bottom of the kernel window
         int left = x - kernel_xsize - 1;
@@ -156,6 +176,7 @@ export void dispersion_threshold(uniform const float_input_t *uniform src,
             dst[idx] = false;
         }
     }
+    // sync
 
     delete[] table.N;
     delete[] table.sum;
